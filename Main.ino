@@ -2,27 +2,20 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
-#include <MAX30105.h>
-#include <Wire.h>
-#include <Adafruit_SSD1306.h>
+#include "oledySensoryBuzzerManager.h"
+#include "SonidoManager.h"
 #include <SD.h>
-#include <SPI.h>
-#include <Adafruit_GFX.h>
-#include "driver/dac.h"
-#include <Audio.h> // Biblioteca para reproducción de audio
 
 // ***** Configuración para Wi-Fi y AWS IoT *****
-const char *ssid = "Prueba";             // Tu red Wi-Fi
-const char *password = "12345678";       // Tu contraseña Wi-Fi
+const char *ssid = "Prueba";
+const char *password = "12345678";
 
-const char *host = "a25ex5q24thysh-ats.iot.us-east-1.amazonaws.com";  // Cambia esto según tu endpoint
-const int port = 8883;                    // Puerto seguro MQTT
+const char *host = "a25ex5q24thysh-ats.iot.us-east-1.amazonaws.com";
+const int port = 8883;
 
 WiFiClientSecure net;
 PubSubClient client(net);
 
-// Certificados de AWS IoT
-// Certificados de AWS IoT
 const char *cert = R"(
 -----BEGIN CERTIFICATE-----
 MIIDWTCCAkGgAwIBAgIUSIX+wu2nuSCgoeYoU/2YogPxilwwDQYJKoZIhvcNAQEL
@@ -99,231 +92,73 @@ o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU
 rqXRfboQnoZsG4q5WTP468SQvvG5
 -----END CERTIFICATE-----
 )";
-// ***** Configuración para sensor y pantalla OLED *****
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 32
-#define SCREEN_ADDRESS 0x3C
-#define SDA_PIN 21
-#define SCL_PIN 22
-#define BUZZER_PIN 12
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
-MAX30105 pulseSensor;
+// Instancias de clases
+OledySensoryBuzzerManager oledyManager;
+SonidoManager sonidoManager;
 
-long lastBeatTime = 0;  // Tiempo del último latido
-float beatsPerMinute = 0;
-float bpmSum = 0;
-int bpmCount = 0;
-
-const long samplingDuration = 10000;  // Duración de 30 segundos para calcular BPM promedio
-
-// ***** Configuración para reproducción de audio *****
-#define DAC1_PIN 25 // Salida DAC1
-#define CS_PIN 5    // Chip Select para el módulo microSD
-
-const char *lowBpmFile = "/d4.wav";
-const char *mediumBpmFile = "/d4.wav";
-const char *highBpmFile = "/BeeSped5.wav";
-
-void setup() {
-  Serial.begin(115200);
-
-  // Configuración Wi-Fi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Conectando a WiFi...");
-  }
-  Serial.println("Conectado a WiFi");
-
-  // Configuración de AWS IoT
-  net.setCACert(rootCA);
-  net.setCertificate(cert);
-  net.setPrivateKey(key);
-  client.setServer(host, port);
-
-  // Inicializar pantalla OLED
-  Wire.begin(SDA_PIN, SCL_PIN);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println("Fallo al inicializar la pantalla SSD1306");
-    while (1);
-  }
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 10);
-  display.println("Iniciando...");
-  display.display();
-
-  delay(2000);
-
-  // Inicializar sensor MAX30105
-  if (!pulseSensor.begin(Wire, I2C_SPEED_STANDARD)) {
-    Serial.println("Fallo al inicializar el sensor MAX30105");
-    while (1);
-  }
-  pulseSensor.setup();
-  pulseSensor.setPulseAmplitudeRed(0x0A);
-  pulseSensor.setPulseAmplitudeIR(0x0A);
-
-  // Configurar buzzer
-  pinMode(BUZZER_PIN, OUTPUT);
-
-  // Configurar microSD y reproducción de audio
-  if (!SD.begin(CS_PIN)) {
-    Serial.println("Fallo al inicializar la tarjeta SD");
-    while (1);
-  }
-  Serial.println("Tarjeta SD inicializada correctamente");
-
-  // Habilitar la salida DAC
-  dac_output_enable(DAC_CHANNEL_1); 
-
-  Serial.println("Sistema listo");
-}
 float avgBPM = 0;
 
-void loop() {
-  // Mantener la conexión MQTT activa
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
+void setup() {
+    Serial.begin(115200);
 
-  bpmSum = 0;
-  bpmCount = 0;
-  long startTime = millis();
-
-  // Tomar datos durante 60 segundos
-  while (millis() - startTime < samplingDuration) {
-    int redValue = pulseSensor.getRed();
-    int irValue = pulseSensor.getIR();
-
-    // Solo considerar valores cuando hay suficiente señal de pulsos
-    if (redValue > 10000 || irValue > 10000) {
-      long currentTime = millis();
-      long delta = currentTime - lastBeatTime;
-
-      // Si el tiempo entre latidos es razonable, calcula el BPM
-      if (delta > 300) {  // 300ms es el mínimo para evitar lecturas erróneas
-        lastBeatTime = currentTime;
-        beatsPerMinute = 60 / (delta / 1000.0);
-
-        // Actualiza el cálculo de BPM
-        updateBpmCalculation(beatsPerMinute);
-
-        // Activar buzzer cuando se detecta un latido válido
-        tone(BUZZER_PIN, 1000, 100);  // Sonido de 1000 Hz durante 100 ms
-      }
+    // Configuración Wi-Fi
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Conectando a WiFi...");
     }
+    Serial.println("Conectado a WiFi");
 
-    // Mostrar BPM en la pantalla OLED
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println("Leyendo...");
-    display.print("BPM Real: ");
-    display.println(beatsPerMinute);
-    display.display();
+    // Configuración AWS IoT
+    net.setCACert(rootCA);
+    net.setCertificate(cert);
+    net.setPrivateKey(key);
+    client.setServer(host, port);
 
-    delay(500);  // Esperar medio segundo entre lecturas
-  }
+    // Inicializar clases
+    oledyManager.init();
+    sonidoManager.init();
 
-  // Calcular el promedio de BPM una vez al final
-  avgBPM = bpmCount > 0 ? bpmSum / bpmCount : 0;
-  
-  Serial.print("BPM Promedio: ");
-  Serial.println(avgBPM);
-
-  // Enviar el BPM promedio a AWS IoT
-  publishData(avgBPM);
-
-// Seleccionar y reproducir el archivo correspondiente
-  if (avgBPM >= 40 && avgBPM <= 60) {
-    playWavFile(lowBpmFile);
-  } else if (avgBPM >= 60 && avgBPM <= 90) {
-    playWavFile(mediumBpmFile);
-  } else if (avgBPM >= 91 && avgBPM <= 150) {
-    playWavFile(highBpmFile);
-  } else {
-    Serial.println("BPM fuera de rango");
-  }
-
-  // Mostrar el promedio de BPM en la pantalla OLED
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print("Promedio: ");
-  display.println(avgBPM);
-  display.display();
-
-  delay(60000);  // Esperar antes de la próxima lectura
+    Serial.println("Sistema listo");
 }
 
-void updateBpmCalculation(float bpm) {
-  bpmSum += bpm;  // Sumar el BPM detectado
-  bpmCount++;     // Incrementar el contador de latidos
-}
+void loop() {
+    if (!client.connected()) {
+        reconnect();
+    }
+    client.loop();
 
-void publishData(float bpm) {
-  // Crear el objeto JSON con la estructura que necesita AWS IoT
-  String payload = "{\"state\": {\"reported\": {\"bpm\": " + String(bpm) + "}}}";
+    avgBPM = oledyManager.getHeartRate();  // Captura la frecuencia cardíaca promedio
 
-  // Publicar el payload en el tema adecuado
-  if (client.publish("$aws/things/Esp32-sensor/shadow/update", payload.c_str())) {
-    Serial.println("Datos enviados a AWS IoT");
-  } else {
-    Serial.println("Error al enviar datos a AWS IoT");
-  }
+    Serial.print("BPM Promedio: ");
+    Serial.println(avgBPM);
+
+    publishData(avgBPM);
+
+    sonidoManager.playSoundBasedOnBPM(avgBPM);
+
+    delay(20000);  // Esperar antes de la próxima lectura
 }
 
 void reconnect() {
-  // Conectar al broker MQTT de AWS IoT
-  while (!client.connected()) {
-    Serial.print("Intentando conectar al broker MQTT...");
-    if (client.connect("Esp32-sensor")) {
-      Serial.println("Conectado al broker MQTT de AWS IoT");
-    } else {
-      Serial.print("Error de conexión: ");
-      Serial.print(client.state());
-      delay(5000);  // Reintentar cada 5 segundos
-         }
+    while (!client.connected()) {
+        Serial.print("Intentando conectar al broker MQTT...");
+        if (client.connect("Esp32-sensor")) {
+            Serial.println("Conectado");
+        } else {
+            Serial.print("Error: ");
+            Serial.println(client.state());
+            delay(5000);
+        }
     }
 }
 
-void playWavFile(const char *fileName) {
-  File wavFile = SD.open(fileName, FILE_READ);
-  if (!wavFile) {
-    Serial.println("No se pudo abrir el archivo WAV");
-    return;
-  }
-
-  uint8_t header[4];
-  wavFile.read(header, 4);
-  if (strncmp((char *)header, "RIFF", 4) != 0) {
-    Serial.println("No es un archivo WAV válido");
-    wavFile.close();
-    return;
-  }
-
-  wavFile.seek(24);
-  uint32_t sampleRate = wavFile.read() | (wavFile.read() << 8);
-
-  wavFile.seek(34);
-  uint16_t bitsPerSample = wavFile.read();
-  if (bitsPerSample > 8) {
-    Serial.println("El archivo tiene más de 8 bits por muestra");
-    wavFile.close();
-    return;
-  }
-
-  Serial.println("Reproduciendo WAV...");
-  while (wavFile.available()) {
-    uint8_t sample = wavFile.read();
-    dac_output_voltage(DAC_CHANNEL_1, sample);
-    delayMicroseconds(1000000 / sampleRate);  // Controlar el ritmo de reproducción
-  }
-
-  wavFile.close();
-  Serial.println("Reproducción terminada");
+void publishData(float bpm) {
+    String payload = "{\"state\": {\"reported\": {\"bpm\": " + String(bpm) + "}}}";
+    if (client.publish("$aws/things/Esp32-sensor/shadow/update", payload.c_str())) {
+        Serial.println("Datos enviados");
+    } else {
+        Serial.println("Error al enviar datos");
+    }
 }
